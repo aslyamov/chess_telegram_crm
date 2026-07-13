@@ -101,7 +101,7 @@ class Student(BaseModel):
 
     group_morning: Optional[str] = None
     group_evening: Optional[str] = None
-    rank: Optional[str] = None
+    rank: Optional[str] = "нет разряда"
 
     def update_calculated_fields(self):
         """Recalculate age and groups based on current birth_date and rapid_rating."""

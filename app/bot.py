@@ -741,7 +741,7 @@ async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
         return
     rank_val = callback.data.split("_", 1)[1]
     if rank_val == "none":
-        rank_val = None
+        rank_val = "нет разряда"
         
     user_data = await state.get_data()
     student_id = user_data['edit_student_id']
