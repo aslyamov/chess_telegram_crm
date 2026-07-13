@@ -12,7 +12,7 @@ from app.models import Student
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def import_from_tsv(file_path: str):
+async def import_from_tsv(file_path: str):
     """
     Импорт данных из файла TSV (табуляция).
     Ожидается, что первая строка - заголовки, соответствующие полям Student.
@@ -70,7 +70,7 @@ def import_from_tsv(file_path: str):
                 if student_data.get('fio'):
                     student = Student(**student_data)
                     student.update_calculated_fields()  # Вычисляем возраст и группы
-                    add_student(student)
+                    await add_student(student)
                     students_added += 1
                     logger.info(f"Добавлен: {student_data['fio']}")
 
@@ -81,4 +81,4 @@ def import_from_tsv(file_path: str):
 
 if __name__ == "__main__":
     # Убедись, что файл пример.txt сохранен в формате TSV (из Excel: Сохранить как -> Текст (разделитель табуляция))
-    import_from_tsv("пример.txt")
+    asyncio.run(import_from_tsv("пример.txt"))

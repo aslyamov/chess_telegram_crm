@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Optional, Tuple
 
-def calculate_detailed_age(birth_date_str: str) -> str:
+def calculate_detailed_age(birth_date_str: Optional[str]) -> str:
     """
     Calculates age in format 'YY лет, MM мес., DD дн.'
     Expects birth_date_str in format 'DD.MM.YYYY' or similar.
@@ -36,7 +36,7 @@ def calculate_detailed_age(birth_date_str: str) -> str:
     except Exception:
         return "—"
 
-def get_age_years(birth_date_str: str) -> Optional[int]:
+def get_age_years(birth_date_str: Optional[str]) -> Optional[int]:
     """Helper to get only full years for group logic."""
     if not birth_date_str or birth_date_str in ["—", "пропуск", ""]:
         return None

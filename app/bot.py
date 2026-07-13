@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types, F, Router, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import Message, CallbackQuery, LinkPreviewOptions
+from aiogram.types import Message, CallbackQuery, LinkPreviewOptions, TelegramObject
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.formatting import Text, Bold, Italic, TextLink, Code, as_list
@@ -50,12 +50,15 @@ router = Router()
 class AdminMiddleware(BaseMiddleware):
     async def __call__(
         self,
-        handler: Callable[[Message, Dict[str, Any]], Awaitable[Any]],
-        event: Message,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        user_id = event.from_user.id
-        if user_id != settings.admin_telegram_id:
+        if not isinstance(event, Message):
+            return await handler(event, data)
+            
+        user = event.from_user
+        if not user or user.id != settings.admin_telegram_id:
             await event.answer("Доступ запрещен.")
             return
         return await handler(event, data)
@@ -111,6 +114,9 @@ async def show_leaderboard_menu(message: Message):
 
 @router.callback_query(F.data.startswith("lbmenu_"))
 async def process_lbmenu_choice(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     menu_type = callback.data.split("_")[1]
     
     builder = InlineKeyboardBuilder()
@@ -168,6 +174,9 @@ async def process_lbmenu_choice(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("lbrank_"))
 async def process_rank_leaderboard_choice(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     rank_val = callback.data.split("_", 1)[1]
     if rank_val == "none":
         rank_val = None
@@ -180,6 +189,9 @@ async def process_rank_leaderboard_choice(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("lb_"))
 async def process_leaderboard_choice(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     parts = callback.data.split("_")
     if len(parts) == 3:
         platform = parts[1]
@@ -380,6 +392,9 @@ async def sync_all_students(message: Message):
 
 @router.callback_query(F.data == "retry_failed_sync")
 async def retry_failed_sync_handler(callback: CallbackQuery):
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     await callback.answer("🔄 Запуск повторного обновления...")
     
     # Загружаем ID сбойных учеников
@@ -547,6 +562,9 @@ async def list_students(message: Message):
 
 @router.callback_query(F.data.startswith("list_"))
 async def process_list_page(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     page = int(callback.data.split("_")[1])
     students = sorted(await get_students(), key=lambda x: x.fio)
     try:
@@ -557,19 +575,25 @@ async def process_list_page(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("view_"))
 async def view_student(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     student = await get_student_by_id(student_id)
     if not student:
         await callback.answer("Ученик не найден")
         return
     await callback.message.edit_text(format_student_info(student), 
-                                     reply_markup=get_student_inline_kb(student.id, bool(student.lichess or student.stepchess), int(page), bool(student.lichess)),
+                                     reply_markup=get_student_inline_kb(student.id or "", bool(student.lichess or student.stepchess), int(page), bool(student.lichess)),
                                      parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
     await callback.answer()
 
 # --- INDIVIDUAL ACTIVITY ---
 @router.callback_query(F.data.startswith("askstact_"))
 async def ask_student_activity_period(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     builder = InlineKeyboardBuilder()
     builder.button(text="🕒 За сегодня", callback_data=f"stact_{student_id}_1_{page}")
@@ -582,6 +606,9 @@ async def ask_student_activity_period(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("stact_"))
 async def show_student_activity_report(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, days, page = callback.data.split("_")
     days = int(days)
     await callback.answer("⏳ Собираю данные...")
@@ -602,6 +629,9 @@ async def show_student_activity_report(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("stannual_"))
 async def show_student_annual_report_handler(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     await callback.answer("⏳ Загрузка результатов...")
     
@@ -621,6 +651,9 @@ async def show_student_annual_report_handler(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("del_"))
 async def ask_delete_confirmation(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     student = await get_student_by_id(student_id)
     if not student: return
@@ -633,6 +666,9 @@ async def ask_delete_confirmation(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("confirm_del_"))
 async def process_confirm_delete(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, _, student_id, page = callback.data.split("_")
     await delete_student(student_id)
     await callback.answer("Ученик удален")
@@ -641,6 +677,9 @@ async def process_confirm_delete(callback: CallbackQuery):
 # --- SYNC INDIVIDUAL ---
 @router.callback_query(F.data.startswith("sync_"))
 async def sync_individual(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     student = await get_student_by_id(student_id)
     if not student: return
@@ -673,6 +712,9 @@ async def sync_individual(callback: CallbackQuery):
 # --- EDIT STUDENT ---
 @router.callback_query(F.data.startswith("edit_"))
 async def start_edit_student(callback: CallbackQuery, state: FSMContext):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     _, student_id, page = callback.data.split("_")
     await state.update_data(edit_student_id=student_id, edit_page=page)
     builder = InlineKeyboardBuilder()
@@ -685,6 +727,9 @@ async def start_edit_student(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(EditStudent.field_to_edit, F.data.startswith("field_"))
 async def process_field_choice(callback: CallbackQuery, state: FSMContext):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     field_name = callback.data.split("_", 1)[1]
     display_name = next((k for k, v in EDIT_FIELDS.items() if v == field_name), field_name)
     await state.update_data(field_to_update=field_name)
@@ -703,6 +748,9 @@ async def process_field_choice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(EditStudent.field_to_edit, F.data.startswith("setrank_"))
 async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     rank_val = callback.data.split("_", 1)[1]
     if rank_val == "none":
         rank_val = None
@@ -870,13 +918,16 @@ async def start_search(message: Message, state: FSMContext):
 
 @router.message(SearchStudent.query)
 async def process_search(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("Введите часть ФИО для поиска.")
+        return
     results = await search_students_by_name(message.text)
     await state.clear()
     if not results:
         await message.answer("Ничего не найдено.", reply_markup=get_main_keyboard())
         return
     for s in results:
-        await message.answer(format_student_info(s), reply_markup=get_student_inline_kb(s.id, bool(s.lichess or s.stepchess), 0, bool(s.lichess)), parse_mode="HTML")
+        await message.answer(format_student_info(s), reply_markup=get_student_inline_kb(s.id or "", bool(s.lichess or s.stepchess), 0, bool(s.lichess)), parse_mode="HTML")
     await message.answer("Поиск завершен.", reply_markup=get_main_keyboard())
 
 @router.callback_query(F.data == "noop")
@@ -923,6 +974,9 @@ async def send_long_message(message: Message, text: str, parse_mode: str = "HTML
 
 @router.callback_query(F.data.startswith("act_"))
 async def show_activity_report_handler(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     days = int(callback.data.split("_")[1])
     await callback.answer("⏳ Собираю...")
     report = await generate_activity_report(await get_students(), days)
@@ -982,6 +1036,9 @@ async def run_full_rebuild(message: Message):
 
 @router.callback_query(F.data.startswith("annual_"))
 async def process_annual_choice(callback: CallbackQuery):
+    if not callback.data or not isinstance(callback.message, Message):
+        await callback.answer()
+        return
     choice = callback.data.split("_")[1]
     
     if choice == "rebuild":
@@ -996,6 +1053,9 @@ async def process_annual_choice(callback: CallbackQuery):
     
     rated_students = [s for s in students if s.lichess]
     leaderboard_data = []
+    
+    title = ""
+    target_score = 0.0
     
     if choice == "main":
         title = "Основной годовой турнир (Лига Утро)"
