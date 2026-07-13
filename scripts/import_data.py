@@ -2,6 +2,7 @@ import sys
 import os
 import csv
 import logging
+import asyncio
 
 # Добавляем корневую папку в путь поиска модулей
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

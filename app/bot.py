@@ -696,7 +696,9 @@ async def sync_individual(callback: CallbackQuery):
             if annual_updates:
                 await update_student(student_id, annual_updates[0][1])
                 # Reload student model to format correct info
-                student = await get_student_by_id(student_id)
+                updated_student = await get_student_by_id(student_id)
+                if updated_student:
+                    student = updated_student
         except Exception as e:
             logging.error(f"Error syncing individual annual tournament: {e}")
             
@@ -766,13 +768,16 @@ async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
     await update_student(student_id, {"rank": rank_val})
     
     updated_student = await get_student_by_id(student_id)
-    if updated_student:
-        updated_student.update_calculated_fields()
-        await update_student(student_id, {
-            "age": updated_student.age,
-            "group_morning": updated_student.group_morning,
-            "group_evening": updated_student.group_evening
-        })
+    if not updated_student:
+        await callback.answer("Ошибка сохранения")
+        return
+        
+    updated_student.update_calculated_fields()
+    await update_student(student_id, {
+        "age": updated_student.age,
+        "group_morning": updated_student.group_morning,
+        "group_evening": updated_student.group_evening
+    })
         
     await state.clear()
     builder = InlineKeyboardBuilder()
@@ -787,6 +792,8 @@ async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
 async def process_new_value(message: Message, state: FSMContext):
     user_data = await state.get_data()
     student_id, field_to_update = user_data['edit_student_id'], user_data['field_to_update']
+    if not message.text:
+        return
     new_val = message.text.strip()
     
     student = await get_student_by_id(student_id)
@@ -835,9 +842,12 @@ async def process_new_value(message: Message, state: FSMContext):
     await update_student(student_id, update_data)
     # Recalculate
     updated_student = await get_student_by_id(student_id)
-    if updated_student:
-        updated_student.update_calculated_fields()
-        await update_student(student_id, {"age": updated_student.age, "group_morning": updated_student.group_morning, "group_evening": updated_student.group_evening})
+    if not updated_student:
+        await message.answer("Ошибка сохранения")
+        return
+        
+    updated_student.update_calculated_fields()
+    await update_student(student_id, {"age": updated_student.age, "group_morning": updated_student.group_morning, "group_evening": updated_student.group_evening})
         
     await state.clear()
     builder = InlineKeyboardBuilder()
@@ -854,6 +864,8 @@ async def start_add_student(message: Message, state: FSMContext):
 
 @router.message(StudentForm.fio)
 async def process_fio(message: Message, state: FSMContext):
+    if not message.text:
+        return
     await state.update_data(fio=message.text)
     await state.set_state(StudentForm.birth_date)
     builder = ReplyKeyboardBuilder()
@@ -862,31 +874,31 @@ async def process_fio(message: Message, state: FSMContext):
 
 @router.message(StudentForm.birth_date)
 async def process_birth_date(message: Message, state: FSMContext):
-    await state.update_data(birth_date=message.text if message.text.lower() != 'пропустить' else None)
+    await state.update_data(birth_date=message.text if (message.text or "").lower() != 'пропустить' else None)
     await state.set_state(StudentForm.lichess)
     await message.answer("Ник Lichess (или 'пропустить'):")
 
 @router.message(StudentForm.lichess)
 async def process_lichess(message: Message, state: FSMContext):
-    await state.update_data(lichess=message.text if message.text.lower() != 'пропустить' else None)
+    await state.update_data(lichess=message.text if (message.text or "").lower() != 'пропустить' else None)
     await state.set_state(StudentForm.stepchess)
     await message.answer("Ник/ID Stepchess (или 'пропустить'):")
 
 @router.message(StudentForm.stepchess)
 async def process_stepchess(message: Message, state: FSMContext):
-    await state.update_data(stepchess=message.text if message.text.lower() != 'пропустить' else None)
+    await state.update_data(stepchess=message.text if (message.text or "").lower() != 'пропустить' else None)
     await state.set_state(StudentForm.fide_id)
     await message.answer("FIDE ID (или 'пропустить'):")
 
 @router.message(StudentForm.fide_id)
 async def process_fide_id(message: Message, state: FSMContext):
-    await state.update_data(fide_id=message.text if message.text.lower() != 'пропустить' else None)
+    await state.update_data(fide_id=message.text if (message.text or "").lower() != 'пропустить' else None)
     await state.set_state(StudentForm.fsr_id)
     await message.answer("ФШР ID (или 'пропустить'):")
 
 @router.message(StudentForm.fsr_id)
 async def process_fsr_id(message: Message, state: FSMContext):
-    fsr_data = message.text if message.text.lower() != 'пропустить' else None
+    fsr_data = message.text if (message.text or "").lower() != 'пропустить' else None
     user_data = await state.get_data()
     student = Student(fio=user_data['fio'], birth_date=user_data.get('birth_date'), lichess=user_data.get('lichess'),
                       stepchess=user_data.get('stepchess'), fide_id=user_data.get('fide_id'), fsr_id=fsr_data)
