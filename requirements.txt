@@ -1,0 +1,10 @@
+aiogram>=3.0.0
+fastapi
+uvicorn
+google-cloud-firestore
+firebase-admin
+pydantic-settings
+python-dotenv
+aiohttp
+beautifulsoup4
+uvloop; sys_platform == 'linux' or sys_platform == 'darwin'

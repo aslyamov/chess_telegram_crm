@@ -1,0 +1,16 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environments
+.env
+
+# Google Cloud & Firebase keys
+data/serviceAccountKey.json
+
+# CLI and IDE files
+.antigravitycli/
+.vscode/
+.idea/
