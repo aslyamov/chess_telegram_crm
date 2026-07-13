@@ -32,7 +32,7 @@ if not firebase_admin._apps:
             logging.error(f"Critical error initializing Firebase Admin: {e2}")
 
 # Initialize Async Firestore client
-db = None
+db: Any = None
 try:
     if os.path.exists(settings.google_application_credentials):
         creds = service_account.Credentials.from_service_account_file(settings.google_application_credentials)
@@ -169,8 +169,9 @@ async def get_students() -> List[Student]:
     students = []
     async for doc in docs:
         data = doc.to_dict()
-        data["id"] = doc.id
-        students.append(Student(**data))
+        if data is not None:
+            data["id"] = doc.id
+            students.append(Student(**data))
     return students
 
 async def get_student_by_id(student_id: str) -> Optional[Student]:
@@ -178,8 +179,9 @@ async def get_student_by_id(student_id: str) -> Optional[Student]:
     doc = await db.collection(COLLECTION_NAME).document(student_id).get()
     if doc.exists:
         data = doc.to_dict()
-        data["id"] = doc.id
-        return Student(**data)
+        if data is not None:
+            data["id"] = doc.id
+            return Student(**data)
     return None
 
 async def update_student(student_id: str, student_data: dict) -> None:
@@ -206,9 +208,10 @@ async def search_students_by_name(name_query: str) -> List[Student]:
     results = []
     async for doc in docs:
         data = doc.to_dict()
-        if name_query.lower() in data.get("fio", "").lower():
-            data["id"] = doc.id
-            results.append(Student(**data))
+        if data is not None:
+            if name_query.lower() in data.get("fio", "").lower():
+                data["id"] = doc.id
+                results.append(Student(**data))
     return results
 
 async def get_lichess_rating(username: str) -> Optional[dict]:
@@ -242,7 +245,7 @@ async def get_fsr_ratings(fsr_id: str) -> Optional[dict]:
             session = await get_session()
             async with session.get(url) as response:
                 if response.status == 200:
-                    results = {"classical": None, "rapid": None, "blitz": None}
+                    results: Dict[str, Optional[int]] = {"classical": None, "rapid": None, "blitz": None}
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     for li in soup.find_all("li", class_="list-group-item"):
