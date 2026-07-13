@@ -65,12 +65,14 @@ class AdminMiddleware(BaseMiddleware):
 
 RANKS = [
     "КМС",
-    "1-й спортивный разряд",
-    "2-й спортивный разряд",
-    "3-й спортивный разряд",
-    "1-й юношеский разряд",
-    "2-й юношеский разряд",
-    "3-й юношеский разряд"
+    "1 разряд",
+    "2 разряд",
+    "3 разряд",
+    "4 разряд",
+    "1 юношеский разряд",
+    "2 юношеский разряд",
+    "3 юношеский разряд",
+    "4 юношеский разряд"
 ]
 
 # Поля для редактирования (названия для кнопок)
@@ -160,32 +162,16 @@ async def process_lbmenu_choice(callback: CallbackQuery):
         await callback.message.edit_text("Выберите дисциплину ФШР:", reply_markup=builder.as_markup())
         
     elif menu_type == "ranks":
-        for r in RANKS:
-            builder.button(text=r, callback_data=f"lbrank_{r}")
-        builder.button(text="Без разряда", callback_data="lbrank_none")
-        builder.button(text="⬅️ Назад", callback_data="lbmenu_back")
-        builder.adjust(1)
-        await callback.message.edit_text("Выберите разряд:", reply_markup=builder.as_markup())
+        students = await get_students()
+        report = generate_rank_leaderboard(students)
+        await callback.message.answer(report, parse_mode="HTML")
 
     elif menu_type == "back":
         await callback.message.edit_text("Выберите платформу для просмотра рейтингов:", reply_markup=get_rating_platform_keyboard())
         
     await callback.answer()
 
-@router.callback_query(F.data.startswith("lbrank_"))
-async def process_rank_leaderboard_choice(callback: CallbackQuery):
-    if not callback.data or not isinstance(callback.message, Message):
-        await callback.answer()
-        return
-    rank_val = callback.data.split("_", 1)[1]
-    if rank_val == "none":
-        rank_val = None
-        
-    students = await get_students()
-    report = generate_rank_leaderboard(students, rank_val)
-    
-    await callback.message.answer(report, parse_mode="HTML")
-    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("lb_"))
 async def process_leaderboard_choice(callback: CallbackQuery):

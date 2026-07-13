@@ -462,17 +462,19 @@ def generate_fide_fsr_leaderboard(students: List[Student], field: str, title: st
     return as_list(*report_items).as_html()
 
 
-def generate_rank_leaderboard(students: List[Student], rank: Optional[str]) -> str:
-    if rank:
-        filtered = [s for s in students if s.rank == rank]
-        title = f"Разряд: {rank}"
-    else:
-        filtered = [s for s in students if not s.rank]
-        title = "Без разряда"
-        
-    if not filtered:
-        return f"В базе пока нет учеников с разрядом: {rank or 'Без разряда'}."
-        
+def generate_rank_leaderboard(students: List[Student]) -> str:
+    ranks_order = [
+        "КМС",
+        "1 разряд",
+        "2 разряд",
+        "3 разряд",
+        "4 разряд",
+        "1 юношеский разряд",
+        "2 юношеский разряд",
+        "3 юношеский разряд",
+        "4 юношеский разряд"
+    ]
+    
     def get_max_rating(s: Student):
         ratings = [
             s.fsr_rapid_rating or 0,
@@ -483,27 +485,61 @@ def generate_rank_leaderboard(students: List[Student], rank: Optional[str]) -> s
         ]
         return max(ratings)
         
-    sorted_students = sorted(filtered, key=lambda x: (-get_max_rating(x), x.fio))
+    report_items = [Text("🏅 ", Bold("Рейтинг по разрядам:")), ""]
+    global_idx = 1
     
-    report_items = [Text("🏅 ", Bold(f"Список учеников по разряду ({title}):")), ""]
-    for i, s in enumerate(sorted_students, 1):
-        ratings_parts = []
-        if s.fsr_rapid_rating:
-            ratings_parts.append(f"ФШР Рп: {s.fsr_rapid_rating}")
-        elif s.fsr_classical_rating:
-            ratings_parts.append(f"ФШР Кл: {s.fsr_classical_rating}")
+    for r in ranks_order:
+        filtered = [s for s in students if s.rank == r]
+        if not filtered:
+            continue
             
-        if s.rapid_rating:
-            is_prov = getattr(s, "is_rapid_provisional", False)
-            ratings_parts.append(f"L Rapid: {s.rapid_rating}{'?' if is_prov else ''}")
+        sorted_students = sorted(filtered, key=lambda x: (-get_max_rating(x), x.fio))
+        report_items.extend([Bold(f"{r}:"), ""])
+        for s in sorted_students:
+            ratings_parts = []
+            if s.fsr_rapid_rating:
+                ratings_parts.append(f"ФШР Рп: {s.fsr_rapid_rating}")
+            elif s.fsr_classical_rating:
+                ratings_parts.append(f"ФШР Кл: {s.fsr_classical_rating}")
+                
+            if s.rapid_rating:
+                is_prov = getattr(s, "is_rapid_provisional", False)
+                ratings_parts.append(f"L Rapid: {s.rapid_rating}{'?' if is_prov else ''}")
+                
+            if s.fide_rapid_rating:
+                ratings_parts.append(f"FIDE Рп: {s.fide_rapid_rating}")
+                
+            ratings_str = " | ".join(ratings_parts) if ratings_parts else "Нет рейтингов"
+            report_items.append(
+                Text(Code(f"{global_idx:>2}."), " 👤 ", Bold(s.fio), f" ({ratings_str})")
+            )
+            global_idx += 1
+        report_items.append("")
+        
+    no_rank_students = [s for s in students if not s.rank or s.rank not in ranks_order]
+    if no_rank_students:
+        sorted_students = sorted(no_rank_students, key=lambda x: (-get_max_rating(x), x.fio))
+        report_items.extend([Bold("Без разряда:"), ""])
+        for s in sorted_students:
+            ratings_parts = []
+            if s.fsr_rapid_rating:
+                ratings_parts.append(f"ФШР Рп: {s.fsr_rapid_rating}")
+            elif s.fsr_classical_rating:
+                ratings_parts.append(f"ФШР Кл: {s.fsr_classical_rating}")
+                
+            if s.rapid_rating:
+                is_prov = getattr(s, "is_rapid_provisional", False)
+                ratings_parts.append(f"L Rapid: {s.rapid_rating}{'?' if is_prov else ''}")
+                
+            if s.fide_rapid_rating:
+                ratings_parts.append(f"FIDE Рп: {s.fide_rapid_rating}")
+                
+            ratings_str = " | ".join(ratings_parts) if ratings_parts else "Нет рейтингов"
+            report_items.append(
+                Text(Code(f"{global_idx:>2}."), " 👤 ", Bold(s.fio), f" ({ratings_str})")
+            )
+            global_idx += 1
             
-        if s.fide_rapid_rating:
-            ratings_parts.append(f"FIDE Рп: {s.fide_rapid_rating}")
-            
-        ratings_str = " | ".join(ratings_parts) if ratings_parts else "Нет рейтингов"
-        report_items.append(
-            Text(Code(f"{i:>2}."), " 👤 ", Bold(s.fio), f"\n   └ {ratings_str}")
-        )
     return as_list(*report_items).as_html()
 
 
