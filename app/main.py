@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import sys
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from aiogram.types import Update
 from .bot import get_dispatcher, Bot
 from .config import settings
@@ -16,7 +16,11 @@ async def lifespan(app: FastAPI):
     # Startup logic
     if settings.webhook_url:
         webhook_url = f"{settings.webhook_url.rstrip('/')}/webhook"
-        await bot.set_webhook(webhook_url, drop_pending_updates=True)
+        await bot.set_webhook(
+            webhook_url,
+            secret_token=settings.webhook_secret or None,
+            drop_pending_updates=True
+        )
         logging.info(f"Bot started in Webhook mode. Webhook set to: {webhook_url}")
     else:
         asyncio.create_task(dp.start_polling(bot))
@@ -29,7 +33,7 @@ async def lifespan(app: FastAPI):
         await bot.delete_webhook()
         logging.info("Webhook deleted.")
     await bot.session.close()
-    await close_session() # Закрываем общую сессию aiohttp
+    await close_session()
 
 app = FastAPI(lifespan=lifespan)
 bot = Bot(token=settings.telegram_bot_token)
@@ -43,6 +47,11 @@ async def index():
 async def webhook(request: Request):
     if not settings.webhook_url:
         return {"status": "error", "message": "Webhook is not configured"}
+    # Verify Telegram secret token if configured
+    if settings.webhook_secret:
+        incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if incoming != settings.webhook_secret:
+            return Response(status_code=403)
     try:
         update_json = await request.json()
         update = Update.model_validate(update_json, context={"bot": bot})

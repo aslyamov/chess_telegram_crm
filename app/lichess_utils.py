@@ -1,3 +1,4 @@
+import re
 import aiohttp
 import json
 import logging
@@ -108,7 +109,7 @@ async def get_user_activity(username: str) -> List[Dict[str, Any]]:
     if settings.lichess_api_token:
         headers["Authorization"] = f"Bearer {settings.lichess_api_token}"
     
-    data = await make_lichess_request(url, headers, response_format="json", cooldown=4.0)
+    data = await make_lichess_request(url, headers, response_format="json", cooldown=1.5)
     return data if data is not None else []
 
 async def generate_monthly_report(team_id: str, students: List[Student]) -> str:
@@ -193,6 +194,62 @@ async def generate_monthly_report(team_id: str, students: List[Student]) -> str:
 async def _get_single_student_activity(student: Student, threshold_ms: float, days: int) -> Optional[Dict[str, Any]]:
     # This helper is deprecated as we now do batch filtering in generate_activity_report directly.
     return None
+
+
+def _get_active_items(t: dict) -> list:
+    """Return list of active item types for a task node."""
+    items = []
+    if t.get('puzzles', 0) > 0: items.append("puzzles")
+    if t.get('controls', 0) > 0: items.append("controls")
+    if t.get('exams', 0) > 0: items.append("exams")
+    return items
+
+
+def _render_activity_item(item_type: str, t: dict, prefix: str, report_items: list) -> None:
+    """Render a single puzzle/control/exam line into report_items."""
+    if item_type == "puzzles":
+        p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
+        p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
+        total_time_str = format_duration(t['time'])
+        avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
+        avg_time_str = format_duration(avg_time_val)
+        time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
+        report_items.append(Text(f"{prefix}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
+    elif item_type == "controls":
+        c_attempts = t.get('controls_attempts', 0)
+        c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
+        solved_str = ""
+        if t.get('controls_max_solved'):
+            solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
+        report_items.append(Text(f"{prefix}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
+    elif item_type == "exams":
+        e_attempts = t.get('exams_attempts', 0)
+        e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
+        report_items.append(Text(f"{prefix}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+
+
+def _render_course_summary(c: dict, report_items: list) -> None:
+    """Render course-level summary when there are no parent groups."""
+    if c['puzzles'] > 0:
+        p_attempts = max(c.get('puzzles_success', 0), c.get('puzzles_attempts', 0))
+        p_avg = round(p_attempts / c['puzzles'], 1) if c['puzzles'] > 0 else 0
+        total_time_str = format_duration(c['time'])
+        avg_time_val = c['time'] / c.get('tasks_count', 0) if c.get('tasks_count', 0) > 0 else 0
+        avg_time_str = format_duration(avg_time_val)
+        time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if c['time'] > 0 else ""
+        report_items.append(Text(f"   └ {c['puzzles']} зад. (✅ {c.get('puzzles_success', 0)}/{c['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
+    if c['controls'] > 0:
+        c_attempts = c.get('controls_attempts', 0)
+        c_avg = round(c_attempts / c['controls'], 1) if c['controls'] > 0 else 0
+        solved_str = ""
+        if c.get('controls_max_solved'):
+            solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in c['controls_max_solved'])
+        report_items.append(Text(f"   └ {c['controls']} контр. (✅ {c.get('controls_success', 0)}/{c['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
+    if c['exams'] > 0:
+        e_attempts = c.get('exams_attempts', 0)
+        e_avg = round(e_attempts / c['exams'], 1) if c['exams'] > 0 else 0
+        report_items.append(Text(f"   └ {c['exams']} экз. (✅ {c.get('exams_success', 0)}/{c['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+
 
 async def generate_activity_report(students: List[Student], days: int = 1) -> str:
     """Generate a detailed summary of student activity."""
@@ -371,7 +428,6 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
             for course, c in s["stats"]["stepchess"]["breakdown"].items():
                 report_items.append(Text("🧩 ", Bold(course), ":"))
                 if "parents" in c and c["parents"]:
-                    import re
                     def parent_sort_key(item):
                         title = item[0]
                         if not title:
@@ -382,161 +438,45 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
                     for p_idx, (parent_title, p_data) in enumerate(parents_list):
                         is_last_parent = (p_idx == len(parents_list) - 1)
                         parent_branch = "   └ " if is_last_parent else "   ├ "
-                        
+                        prefix_parent_child = "   │  " if not is_last_parent else "      "
+
                         if parent_title:
                             report_items.append(Text(f"{parent_branch}{parent_title}"))
-                            prefix_parent_child = "   │  " if not is_last_parent else "      "
-                            
                             tasks_list = list(p_data["tasks"].items())
                             for t_idx, (task_title, t) in enumerate(tasks_list):
                                 is_last_task = (t_idx == len(tasks_list) - 1)
-                                
-                                active_items = []
-                                if t.get('puzzles', 0) > 0: active_items.append("puzzles")
-                                if t.get('controls', 0) > 0: active_items.append("controls")
-                                if t.get('exams', 0) > 0: active_items.append("exams")
-                                
+                                active_items = _get_active_items(t)
                                 if task_title:
-                                    prefix_branch = f"{prefix_parent_child}├─ " if not is_last_task else f"{prefix_parent_child}└─ "
-                                    prefix_child = f"{prefix_parent_child}│  " if not is_last_task else f"{prefix_parent_child}   "
-                                    
+                                    prefix_branch = f"{prefix_parent_child}└─ " if is_last_task else f"{prefix_parent_child}├─ "
+                                    prefix_child = f"{prefix_parent_child}   " if is_last_task else f"{prefix_parent_child}│  "
                                     report_items.append(Text(f"{prefix_branch}{task_title}"))
-                                    
                                     for item_idx, item_type in enumerate(active_items):
-                                        item_is_last = (item_idx == len(active_items) - 1)
-                                        item_branch = "└ " if item_is_last else "├ "
-                                        
-                                        if item_type == "puzzles":
-                                            p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
-                                            p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
-                                            
-                                            total_time_str = format_duration(t['time'])
-                                            avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
-                                            avg_time_str = format_duration(avg_time_val)
-                                            time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
-                                            
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-                                        elif item_type == "controls":
-                                            c_attempts = t.get('controls_attempts', 0)
-                                            c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
-                                            solved_str = ""
-                                            if t.get('controls_max_solved'):
-                                                solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-                                        elif item_type == "exams":
-                                            e_attempts = t.get('exams_attempts', 0)
-                                            e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+                                        item_branch = f"{prefix_child}└ " if item_idx == len(active_items) - 1 else f"{prefix_child}├ "
+                                        _render_activity_item(item_type, t, item_branch, report_items)
                                 else:
                                     for item_idx, item_type in enumerate(active_items):
-                                        is_last_item = (item_idx == len(active_items) - 1) and is_last_task
-                                        item_branch = f"{prefix_parent_child}└─ " if is_last_item else f"{prefix_parent_child}├─ "
-                                        
-                                        if item_type == "puzzles":
-                                            p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
-                                            p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
-                                            total_time_str = format_duration(t['time'])
-                                            avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
-                                            avg_time_str = format_duration(avg_time_val)
-                                            time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
-                                            report_items.append(Text(f"{item_branch}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-                                        elif item_type == "controls":
-                                            c_attempts = t.get('controls_attempts', 0)
-                                            c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
-                                            solved_str = ""
-                                            if t.get('controls_max_solved'):
-                                                solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
-                                            report_items.append(Text(f"{item_branch}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-                                        elif item_type == "exams":
-                                            e_attempts = t.get('exams_attempts', 0)
-                                            e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
-                                            report_items.append(Text(f"{item_branch}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+                                        is_last = (item_idx == len(active_items) - 1) and is_last_task
+                                        item_branch = f"{prefix_parent_child}└─ " if is_last else f"{prefix_parent_child}├─ "
+                                        _render_activity_item(item_type, t, item_branch, report_items)
                         else:
-                            # parent_title is empty: render tasks directly under course
                             tasks_list = list(p_data["tasks"].items())
                             for t_idx, (task_title, t) in enumerate(tasks_list):
                                 is_last_task = (t_idx == len(tasks_list) - 1)
-                                
-                                active_items = []
-                                if t.get('puzzles', 0) > 0: active_items.append("puzzles")
-                                if t.get('controls', 0) > 0: active_items.append("controls")
-                                if t.get('exams', 0) > 0: active_items.append("exams")
-                                
+                                active_items = _get_active_items(t)
                                 if task_title:
                                     prefix_branch = "   └ " if is_last_task else "   ├ "
-                                    prefix_child  = "      " if is_last_task else "   │  "
-                                    
+                                    prefix_child = "      " if is_last_task else "   │  "
                                     report_items.append(Text(f"{prefix_branch}{task_title}"))
-                                    
                                     for item_idx, item_type in enumerate(active_items):
-                                        item_is_last = (item_idx == len(active_items) - 1)
-                                        item_branch = "└ " if item_is_last else "├ "
-                                        
-                                        if item_type == "puzzles":
-                                            p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
-                                            p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
-                                            total_time_str = format_duration(t['time'])
-                                            avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
-                                            avg_time_str = format_duration(avg_time_val)
-                                            time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-                                        elif item_type == "controls":
-                                            c_attempts = t.get('controls_attempts', 0)
-                                            c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
-                                            solved_str = ""
-                                            if t.get('controls_max_solved'):
-                                                solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-                                        elif item_type == "exams":
-                                            e_attempts = t.get('exams_attempts', 0)
-                                            e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
-                                            report_items.append(Text(f"{prefix_child}{item_branch}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+                                        item_branch = f"{prefix_child}└ " if item_idx == len(active_items) - 1 else f"{prefix_child}├ "
+                                        _render_activity_item(item_type, t, item_branch, report_items)
                                 else:
                                     for item_idx, item_type in enumerate(active_items):
-                                        is_last_item = (item_idx == len(active_items) - 1) and is_last_task
-                                        item_branch = "   └ " if is_last_item else "   ├ "
-                                        
-                                        if item_type == "puzzles":
-                                            p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
-                                            p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
-                                            total_time_str = format_duration(t['time'])
-                                            avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
-                                            avg_time_str = format_duration(avg_time_val)
-                                            time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
-                                            report_items.append(Text(f"{item_branch}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-                                        elif item_type == "controls":
-                                            c_attempts = t.get('controls_attempts', 0)
-                                            c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
-                                            solved_str = ""
-                                            if t.get('controls_max_solved'):
-                                                solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
-                                            report_items.append(Text(f"{item_branch}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-                                        elif item_type == "exams":
-                                            e_attempts = t.get('exams_attempts', 0)
-                                            e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
-                                            report_items.append(Text(f"{item_branch}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+                                        is_last = (item_idx == len(active_items) - 1) and is_last_task
+                                        item_branch = "   └ " if is_last else "   ├ "
+                                        _render_activity_item(item_type, t, item_branch, report_items)
                 else:
-                    if c['puzzles'] > 0:
-                        p_attempts = max(c.get('puzzles_success', 0), c.get('puzzles_attempts', 0))
-                        p_avg = round(p_attempts / c['puzzles'], 1) if c['puzzles'] > 0 else 0
-                        
-                        total_time_str = format_duration(c['time'])
-                        avg_time_val = c['time'] / c.get('tasks_count', 0) if c.get('tasks_count', 0) > 0 else 0
-                        avg_time_str = format_duration(avg_time_val)
-                        time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if c['time'] > 0 else ""
-                        
-                        report_items.append(Text(f"   └ {c['puzzles']} зад. (✅ {c.get('puzzles_success', 0)}/{c['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-                    if c['controls'] > 0:
-                        c_attempts = c.get('controls_attempts', 0)
-                        c_avg = round(c_attempts / c['controls'], 1) if c['controls'] > 0 else 0
-                        solved_str = ""
-                        if c.get('controls_max_solved'):
-                            solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in c['controls_max_solved'])
-                        report_items.append(Text(f"   └ {c['controls']} контр. (✅ {c.get('controls_success', 0)}/{c['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-                    if c['exams'] > 0:
-                        e_attempts = c.get('exams_attempts', 0)
-                        e_avg = round(e_attempts / c['exams'], 1) if c['exams'] > 0 else 0
-                        report_items.append(Text(f"   └ {c['exams']} экз. (✅ {c.get('exams_success', 0)}/{c['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+                    _render_course_summary(c, report_items)
         report_items.append("")
     return as_list(*report_items).as_html()
 
@@ -780,18 +720,36 @@ async def sync_annual_tournament_results(team_id: str, students: List[Student], 
     If False, fetches only tournaments in the current and previous months.
     Returns a list of updates (student_id, update_dict) to write to database.
     """
-    all_tournaments = await get_team_tournaments(team_id)
+    # Try Firestore cache first (max 1 hour old)
+    all_tournaments = None
+    try:
+        doc = await db.collection("metadata").document("team_tournaments").get()
+        if doc.exists:
+            data = doc.to_dict()
+            cached_at_str = data.get("updated_at")
+            if cached_at_str:
+                cache_age = (datetime.utcnow() - datetime.fromisoformat(cached_at_str)).total_seconds()
+                if cache_age < 3600:
+                    all_tournaments = data.get("tournaments", [])
+                    logging.info("sync_annual: loaded team tournaments from Firestore cache.")
+    except Exception as e:
+        logging.error(f"Error reading team tournaments from Firestore cache: {e}")
+
+    if not all_tournaments:
+        all_tournaments = await get_team_tournaments(team_id)
+        if all_tournaments:
+            try:
+                await db.collection("metadata").document("team_tournaments").set({
+                    "tournaments": all_tournaments,
+                    "updated_at": datetime.utcnow().isoformat()
+                })
+                logging.info("Saved team tournaments list to Firestore.")
+            except Exception as e:
+                logging.error(f"Error saving team tournaments list to Firestore: {e}")
+
     if not all_tournaments:
         return []
-        
-    try:
-        await db.collection("metadata").document("team_tournaments").set({
-            "tournaments": all_tournaments,
-            "updated_at": datetime.utcnow().isoformat()
-        })
-        logging.info("Saved team tournaments list to Firestore.")
-    except Exception as e:
-        logging.error(f"Error saving team tournaments list to Firestore: {e}")
+
         
     now = datetime.now()
     months_ru_mapping = {

@@ -26,15 +26,12 @@ async def import_from_tsv(file_path: str):
     headers_map = {
         'ФИО': 'fio',
         'Дата рождения': 'birth_date',
-        'Возраст': 'age',
         'ФШР id': 'fsr_id',
         'ФИДЕ id': 'fide_id',
-        'Город, район': 'city_district',
+        'Город': 'city',
         'Lichess': 'lichess',
         'Stepchess': 'stepchess',
-        'Рапид рейтинг': 'rapid_rating',
-        'Группа. Утро': 'group_morning',
-        'Группа. Вечер': 'group_evening'
+        'Разряд': 'rank',
     }
 
     students_added = 0
@@ -48,25 +45,9 @@ async def import_from_tsv(file_path: str):
                 student_data = {}
                 for rus_key, eng_key in headers_map.items():
                     val = row.get(rus_key)
-                    if val:
-                        # Обработка числовых полей
-                        if eng_key == 'rapid_rating':
-                            raw_val = val.strip()
-                            if '?' in raw_val:
-                                student_data['is_provisional'] = True
-                                raw_val = raw_val.replace('?', '')
-                            try:
-                                student_data[eng_key] = int(raw_val)
-                            except (ValueError, TypeError):
-                                student_data[eng_key] = None
-                        elif eng_key == 'age':
-                            # Возраст мы все равно пересчитаем
-                            try:
-                                student_data[eng_key] = val
-                            except:
-                                student_data[eng_key] = None
-                        else:
-                            student_data[eng_key] = val.strip()
+                    if val and val.strip():
+                        student_data[eng_key] = val.strip()
+
                 
                 if student_data.get('fio'):
                     student = Student(**student_data)

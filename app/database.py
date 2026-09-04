@@ -12,8 +12,26 @@ from .config import settings
 from .models import Student, LICHESS_VARIANTS
 from typing import List, Optional, Any, Dict
 
-_lichess_sem = asyncio.Semaphore(1)
-_fsr_lock = asyncio.Lock()
+import time
+
+_lichess_sem: Optional[asyncio.Semaphore] = None
+_fsr_lock: Optional[asyncio.Lock] = None
+
+
+def _get_lichess_sem() -> asyncio.Semaphore:
+    global _lichess_sem
+    if _lichess_sem is None:
+        _lichess_sem = asyncio.Semaphore(3)  # 3 concurrent — safe with Lichess token
+    return _lichess_sem
+
+
+def _get_fsr_lock() -> asyncio.Lock:
+    global _fsr_lock
+    if _fsr_lock is None:
+        _fsr_lock = asyncio.Lock()
+    return _fsr_lock
+
+
 
 # Initialize Firebase for general purposes if needed
 if not firebase_admin._apps:
@@ -74,7 +92,7 @@ async def make_lichess_request(
     max_retries = 3
     base_backoff = 61.0
     
-    async with _lichess_sem:
+    async with _get_lichess_sem():
         for attempt in range(1, max_retries + 1):
             try:
                 session = await get_session()
@@ -157,14 +175,35 @@ async def get_lichess_ratings_batch(usernames: List[str]) -> Dict[str, dict]:
             
     return results
 
+
+# --- Students in-memory cache (TTL = 60 seconds) ---
+_students_cache: Optional[List[Student]] = None
+_students_cache_time: float = 0.0
+_STUDENTS_CACHE_TTL: float = 60.0
+
+
+def invalidate_students_cache() -> None:
+    """Invalidate in-memory students cache. Call after any mutation."""
+    global _students_cache, _students_cache_time
+    _students_cache = None
+    _students_cache_time = 0.0
+
+
 async def add_student(student: Student) -> str:
     """Add a new student to Firestore."""
     student_dict = student.model_dump(exclude={"id"})
     _, doc_ref = await db.collection(COLLECTION_NAME).add(student_dict)
+    invalidate_students_cache()
     return doc_ref.id
 
+
 async def get_students() -> List[Student]:
-    """Get all students from Firestore."""
+    """Get all students from Firestore, with 60-second in-memory cache."""
+    global _students_cache, _students_cache_time
+    now = time.monotonic()
+    if _students_cache is not None and (now - _students_cache_time) < _STUDENTS_CACHE_TTL:
+        return _students_cache
+
     docs = db.collection(COLLECTION_NAME).stream()
     students = []
     async for doc in docs:
@@ -172,7 +211,11 @@ async def get_students() -> List[Student]:
         if data is not None:
             data["id"] = doc.id
             students.append(Student(**data))
+
+    _students_cache = students
+    _students_cache_time = now
     return students
+
 
 async def get_student_by_id(student_id: str) -> Optional[Student]:
     """Get a student by their ID."""
@@ -187,6 +230,7 @@ async def get_student_by_id(student_id: str) -> Optional[Student]:
 async def update_student(student_id: str, student_data: dict) -> None:
     """Update student data."""
     await db.collection(COLLECTION_NAME).document(student_id).update(student_data)
+    invalidate_students_cache()
 
 async def update_students_batch(updates: List[tuple]) -> None:
     """Perform batch updates in Firestore. updates is a list of (student_id, data_dict)."""
@@ -197,22 +241,18 @@ async def update_students_batch(updates: List[tuple]) -> None:
         doc_ref = db.collection(COLLECTION_NAME).document(student_id)
         batch.update(doc_ref, data)
     await batch.commit()
+    invalidate_students_cache()
 
 async def delete_student(student_id: str) -> None:
     """Delete a student by ID."""
     await db.collection(COLLECTION_NAME).document(student_id).delete()
+    invalidate_students_cache()
 
 async def search_students_by_name(name_query: str) -> List[Student]:
-    """Search students by partial FIO match."""
-    docs = db.collection(COLLECTION_NAME).stream()
-    results = []
-    async for doc in docs:
-        data = doc.to_dict()
-        if data is not None:
-            if name_query.lower() in data.get("fio", "").lower():
-                data["id"] = doc.id
-                results.append(Student(**data))
-    return results
+    """Search students by partial FIO match (uses cache)."""
+    students = await get_students()
+    return [s for s in students if name_query.lower() in s.fio.lower()]
+
 
 async def get_lichess_rating(username: str) -> Optional[dict]:
     """Fetch ratings and tactical stats from Lichess API."""
@@ -240,7 +280,7 @@ async def get_lichess_rating(username: str) -> Optional[dict]:
 async def get_fsr_ratings(fsr_id: str) -> Optional[dict]:
     """Fetch Classical, Rapid, Blitz ratings from Ruchess (FSR) by scraping."""
     url = f"https://ratings.ruchess.ru/people/{fsr_id}"
-    async with _fsr_lock:
+    async with _get_fsr_lock():
         try:
             session = await get_session()
             async with session.get(url) as response:

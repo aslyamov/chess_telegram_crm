@@ -15,7 +15,7 @@ from .database import (
     add_student, get_students, delete_student, search_students_by_name, 
     get_student_by_id, update_student, get_lichess_rating, get_fsr_ratings, 
     get_fide_ratings, update_students_batch, close_session, get_lichess_ratings_batch,
-    db
+    invalidate_students_cache, db
 )
 from .models import Student, LICHESS_VARIANTS, LICHESS_LABELS
 from .states import StudentForm, SearchStudent, EditStudent
@@ -54,14 +54,20 @@ class AdminMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        if not isinstance(event, Message):
-            return await handler(event, data)
-            
-        user = event.from_user
+        user = None
+        if isinstance(event, Message):
+            user = event.from_user
+        elif isinstance(event, CallbackQuery):
+            user = event.from_user
+
         if not user or user.id != settings.admin_telegram_id:
-            await event.answer("Доступ запрещен.")
+            if isinstance(event, Message):
+                await event.answer("Доступ запрещен.")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("Доступ запрещен.", show_alert=True)
             return
         return await handler(event, data)
+
 
 RANKS = [
     "КМС",
@@ -886,28 +892,35 @@ async def process_fide_id(message: Message, state: FSMContext):
 async def process_fsr_id(message: Message, state: FSMContext):
     fsr_data = message.text if (message.text or "").lower() != 'пропустить' else None
     user_data = await state.get_data()
+
+    # Очищаем state сразу — предотвращает повторное срабатывание при ретрансляции апдейта
+    await state.clear()
+
     student = Student(fio=user_data['fio'], birth_date=user_data.get('birth_date'), lichess=user_data.get('lichess'),
                       stepchess=user_data.get('stepchess'), fide_id=user_data.get('fide_id'), fsr_id=fsr_data)
     
-    # Сразу собираем рейтинги для нового ученика
+    # Собираем рейтинги (Lichess/FSR/FIDE) для нового ученика
     semaphore = asyncio.Semaphore(1)
     await update_single_student_data(student, semaphore)
     
     student_id = await add_student(student)
     student.id = student_id
+
+    # Сразу отвечаем пользователю — не ждём тяжёлого full_rebuild
+    await message.answer(f"✅ Ученик {student.fio} добавлен!", reply_markup=get_main_keyboard())
     
-    # Сразу подтягиваем годовую историю турниров Lichess за этот год
+    # Годовую историю турниров синхронизируем в фоне (full_rebuild=True медленный)
     if student.lichess:
-        try:
-            from .lichess_utils import sync_annual_tournament_results
-            annual_updates = await sync_annual_tournament_results(settings.lichess_team_id, [student], full_rebuild=True)
-            if annual_updates:
-                await update_student(student_id, annual_updates[0][1])
-        except Exception as e:
-            logging.error(f"Error syncing annual tournament for new student: {e}")
-            
-    await state.clear()
-    await message.answer(f"Ученик {student.fio} добавлен!", reply_markup=get_main_keyboard())
+        async def _bg_annual_sync():
+            try:
+                from .lichess_utils import sync_annual_tournament_results
+                annual_updates = await sync_annual_tournament_results(settings.lichess_team_id, [student], full_rebuild=True)
+                if annual_updates:
+                    await update_student(student_id, annual_updates[0][1])
+                    logging.info(f"Background annual sync done for {student.fio}")
+            except Exception as e:
+                logging.error(f"Error syncing annual tournament for new student: {e}")
+        asyncio.create_task(_bg_annual_sync())
 
 @router.message(F.text == "🔍 Поиск")
 async def start_search(message: Message, state: FSMContext):
@@ -1123,5 +1136,7 @@ async def process_annual_choice(callback: CallbackQuery):
 def get_dispatcher():
     dp = Dispatcher()
     dp.message.outer_middleware(AdminMiddleware())
+    dp.callback_query.outer_middleware(AdminMiddleware())
     dp.include_router(router)
     return dp
+
