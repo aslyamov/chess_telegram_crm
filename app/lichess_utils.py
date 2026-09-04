@@ -172,8 +172,8 @@ async def generate_monthly_report(team_id: str, students: List[Student]) -> str:
             logging.error(f"Error fetching tournament results for {tour.get('id')}: {e}")
             return []
 
-    for tour, _ in current_tournaments:
-        res_list = await fetch_and_process_results(tour)
+    res_lists = await asyncio.gather(*[fetch_and_process_results(tour) for tour, _ in current_tournaments])
+    for res_list in res_lists:
         found_results.extend(res_list)
 
     if not found_results: return f"В турнирах за {month_display} ученики пока не участвовали."
@@ -191,9 +191,6 @@ async def generate_monthly_report(team_id: str, students: List[Student]) -> str:
 
     return as_list(*report_items).as_html()
 
-async def _get_single_student_activity(student: Student, threshold_ms: float, days: int) -> Optional[Dict[str, Any]]:
-    # This helper is deprecated as we now do batch filtering in generate_activity_report directly.
-    return None
 
 
 def _get_active_items(t: dict) -> list:
@@ -362,7 +359,12 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
 
         res_report = None
         if stats:
-            res_report = {"name": student.fio, "is_provisional": student.is_rapid_provisional, "stats": stats}
+            prov_map = {pt: getattr(student, f"is_{pt}_provisional", False) for pt in LICHESS_VARIANTS}
+            if current:
+                for pt in LICHESS_VARIANTS:
+                    if f"is_{pt}_provisional" in current:
+                        prov_map[pt] = current[f"is_{pt}_provisional"]
+            res_report = {"name": student.fio, "prov_map": prov_map, "stats": stats}
             
         # Подготавливаем данные для обновления в БД (с пересчетом возраста и групп)
         update_info = None
@@ -419,7 +421,8 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
                 p_name = perf_map.get(p_type, p_type.capitalize())
                 sign = "+" if data.get("delta", 0) > 0 else ""
                 unit = "задач" if p_type == "puzzles" else "игр"
-                rating_str = f"{data.get('rating', 0)}{'?' if s['is_provisional'] else ''}"
+                is_prov = s.get("prov_map", {}).get(p_type, False)
+                rating_str = f"{data.get('rating', 0)}{'?' if is_prov else ''}"
                 report_items.append(
                     Text(f"🐴 {p_name}: {rating_str} ({sign}{data['delta']}) — {data['count']} {unit}")
                 )
@@ -834,11 +837,7 @@ async def sync_annual_tournament_results(team_id: str, students: List[Student], 
         
         # Copy existing annual_results (if any)
         if student.annual_results:
-            for m, r in student.annual_results.items():
-                if isinstance(r, dict):
-                    updated_results[m] = MonthlyTournamentResult(**r)
-                else:
-                    updated_results[m] = r
+            updated_results = dict(student.annual_results)
         else:
             has_changes = True
             
@@ -906,9 +905,6 @@ def calculate_student_annual_metrics(student: Student, league: str) -> dict:
     for m in MONTHS_RU:
         res = results.get(m)
         if res:
-            if isinstance(res, dict):
-                res = MonthlyTournamentResult(**res)
-            
             g = res.group
             if g != "Нет данных" and res.score > 0:
                 is_evening = "Вечер" in g or g in ["Группа А", "Группа В", "Группа С"]
@@ -1003,9 +999,6 @@ async def generate_student_annual_report(student: Student) -> str:
     for month in MONTHS_RU:
         res = results.get(month)
         if res:
-            if isinstance(res, dict):
-                res = MonthlyTournamentResult(**res)
-            
             if res.tournament_id:
                 t_name = res.tournament_name or tour_names.get(res.tournament_id) or f"Турнир {res.tournament_id}"
                 t_name = t_name.replace("Онлайн-лига.", "").strip()

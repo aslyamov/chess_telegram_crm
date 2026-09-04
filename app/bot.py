@@ -537,7 +537,8 @@ def get_pagination_keyboard(students: List[Student], page: int = 0, page_size: i
     
     nav = []
     nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"list_{page-1}" if page > 0 else "noop"))
-    nav.append(types.InlineKeyboardButton(text=f"{page+1}/{(len(students)-1)//page_size + 1}", callback_data="noop"))
+    total_pages = max(1, (len(students) - 1) // page_size + 1)
+    nav.append(types.InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
     nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"list_{page+1}" if end_idx < len(students) else "noop"))
     builder.row(*nav)
     return builder.as_markup()
@@ -570,7 +571,8 @@ async def view_student(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     student = await get_student_by_id(student_id)
     if not student:
         await callback.answer("Ученик не найден")
@@ -586,7 +588,8 @@ async def ask_student_activity_period(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     builder = InlineKeyboardBuilder()
     builder.button(text="🕒 За сегодня", callback_data=f"stact_{student_id}_1_{page}")
     builder.button(text="📅 За неделю", callback_data=f"stact_{student_id}_7_{page}")
@@ -601,7 +604,8 @@ async def show_student_activity_report(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, days, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, days, page = rest.rsplit("_", 2)
     days = int(days)
     await callback.answer("⏳ Собираю данные...")
     
@@ -624,7 +628,8 @@ async def show_student_annual_report_handler(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     await callback.answer("⏳ Загрузка результатов...")
     
     student = await get_student_by_id(student_id)
@@ -646,7 +651,8 @@ async def ask_delete_confirmation(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     student = await get_student_by_id(student_id)
     if not student: return
     builder = InlineKeyboardBuilder()
@@ -661,7 +667,8 @@ async def process_confirm_delete(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, _, student_id, page = callback.data.split("_")
+    _, _, rest = callback.data.split("_", 2)
+    student_id, page = rest.rsplit("_", 1)
     await delete_student(student_id)
     await callback.answer("Ученик удален")
     await list_students(callback.message)
@@ -672,7 +679,8 @@ async def sync_individual(callback: CallbackQuery):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     student = await get_student_by_id(student_id)
     if not student: return
     await callback.answer("Обновляю...")
@@ -709,7 +717,8 @@ async def start_edit_student(callback: CallbackQuery, state: FSMContext):
     if not callback.data or not isinstance(callback.message, Message):
         await callback.answer()
         return
-    _, student_id, page = callback.data.split("_")
+    _, rest = callback.data.split("_", 1)
+    student_id, page = rest.rsplit("_", 1)
     await state.update_data(edit_student_id=student_id, edit_page=page)
     builder = InlineKeyboardBuilder()
     for label, field in EDIT_FIELDS.items():
@@ -899,14 +908,20 @@ async def process_fsr_id(message: Message, state: FSMContext):
     student = Student(fio=user_data['fio'], birth_date=user_data.get('birth_date'), lichess=user_data.get('lichess'),
                       stepchess=user_data.get('stepchess'), fide_id=user_data.get('fide_id'), fsr_id=fsr_data)
     
-    # Собираем рейтинги (Lichess/FSR/FIDE) для нового ученика
-    semaphore = asyncio.Semaphore(1)
-    await update_single_student_data(student, semaphore)
+    status_msg = await message.answer(f"⏳ Добавляю ученика {student.fio} и загружаю рейтинги...")
     
     student_id = await add_student(student)
     student.id = student_id
 
-    # Сразу отвечаем пользователю — не ждём тяжёлого full_rebuild
+    semaphore = asyncio.Semaphore(1)
+    res = await update_single_student_data(student, semaphore)
+    if res:
+        await update_student(student_id, res[1])
+
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
     await message.answer(f"✅ Ученик {student.fio} добавлен!", reply_markup=get_main_keyboard())
     
     # Годовую историю турниров синхронизируем в фоне (full_rebuild=True медленный)
@@ -954,10 +969,10 @@ async def ask_activity_period(message: Message):
 
 async def send_long_message(message: Message, text: str, parse_mode: str = "HTML"):
     """
-    Отправляет длинное сообщение в Telegram, разбивая его на части <= 4000 символов.
+    Отправляет длинное сообщение в Telegram, разбивая его на части <= 4096 символов.
     Разбивка идет по строкам (\n), чтобы не разрывать HTML-теги форматирования.
     """
-    if len(text) <= 4000:
+    if len(text) <= 4096:
         await message.answer(text, parse_mode=parse_mode)
         return
 
@@ -966,15 +981,15 @@ async def send_long_message(message: Message, text: str, parse_mode: str = "HTML
     current_length = 0
 
     for line in lines:
-        if current_length + len(line) + 1 > 4000:
+        if current_length + len(line) + 1 > 4096:
             if current_chunk:
                 await message.answer("\n".join(current_chunk), parse_mode=parse_mode)
                 current_chunk = []
                 current_length = 0
             
-            if len(line) > 4000:
-                for i in range(0, len(line), 4000):
-                    await message.answer(line[i:i+4000], parse_mode=parse_mode)
+            if len(line) > 4096:
+                for i in range(0, len(line), 4096):
+                    await message.answer(line[i:i+4096], parse_mode=parse_mode)
                 continue
                 
         current_chunk.append(line)
@@ -997,7 +1012,7 @@ async def show_activity_report_handler(callback: CallbackQuery):
 async def show_monthly_report_handler(message: Message):
     status_msg = await message.answer("⏳ Собираю данные Lichess...")
     report = await generate_monthly_report(settings.lichess_team_id, await get_students())
-    if len(report) > 4000:
+    if len(report) > 4096:
         await status_msg.delete()
         await send_long_message(message, report, parse_mode="HTML")
     else:

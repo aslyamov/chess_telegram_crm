@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, Dict, List
 from .utils import calculate_detailed_age, get_age_years, calculate_morning_group, calculate_evening_group
 
@@ -65,8 +65,8 @@ class Student(BaseModel):
     horde_rating: Optional[int] = None
     racingKings_rating: Optional[int] = None
 
-    fsr_rating: Optional[int] = None # Deprecated
-    fide_rating: Optional[int] = None # Deprecated
+    fsr_rating: Optional[int] = None  # Deprecated — use fsr_rapid_rating
+    fide_rating: Optional[int] = None  # Deprecated — use fide_rapid_rating
 
     fsr_classical_rating: Optional[int] = None
     fsr_rapid_rating: Optional[int] = None
@@ -103,6 +103,20 @@ class Student(BaseModel):
     group_evening: Optional[str] = None
     rank: Optional[str] = "нет разряда"
 
+    @field_validator("annual_results", mode="before")
+    @classmethod
+    def coerce_annual_results(cls, v: dict) -> dict:
+        """Auto-convert dict values from Firestore into MonthlyTournamentResult objects."""
+        if not v:
+            return v
+        result = {}
+        for month, entry in v.items():
+            if isinstance(entry, dict):
+                result[month] = MonthlyTournamentResult(**entry)
+            else:
+                result[month] = entry
+        return result
+
     def update_calculated_fields(self):
         """Recalculate age and groups based on current birth_date and rapid_rating."""
         if self.fsr_rapid_rating is None and self.fsr_rating is not None:
@@ -112,7 +126,9 @@ class Student(BaseModel):
 
         self.age = calculate_detailed_age(self.birth_date)
         age_years = get_age_years(self.birth_date)
-        # Группы рассчитываются по целому числу рейтинга
-        self.group_morning = calculate_morning_group(age_years, self.rapid_rating)
-        self.group_evening = calculate_evening_group(self.rapid_rating)
+        # Группы рассчитываются по рейтингу: неоткалиброванный рейтинг (со знаком ?) считается как 600
+        rating_for_groups = 600 if self.is_rapid_provisional else self.rapid_rating
+        self.group_morning = calculate_morning_group(age_years, rating_for_groups)
+        self.group_evening = calculate_evening_group(rating_for_groups)
+
 

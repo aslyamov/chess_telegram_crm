@@ -3,16 +3,29 @@ from google.oauth2 import service_account
 import firebase_admin
 from firebase_admin import credentials
 import aiohttp
-import re
 import logging
 import asyncio
 import os
+import time
 from bs4 import BeautifulSoup
 from .config import settings
 from .models import Student, LICHESS_VARIANTS
 from typing import List, Optional, Any, Dict
 
-import time
+
+def _parse_lichess_perfs(user_data: dict) -> dict:
+    """Parse Lichess API user perfs dict into flat ratings/tactical dict."""
+    perfs = user_data.get("perfs", {})
+    result: dict = {}
+    for pt in LICHESS_VARIANTS:
+        p_data = perfs.get(pt, {})
+        is_prov = p_data.get("prov", False) or p_data.get("games", 0) == 0
+        result[f"{pt}_rating"] = p_data.get("rating")
+        result[f"is_{pt}_provisional"] = is_prov
+    for pt in ("storm", "racer", "streak"):
+        result[f"{pt}_score"] = perfs.get(pt, {}).get("score")
+    return result
+
 
 _lichess_sem: Optional[asyncio.Semaphore] = None
 _fsr_lock: Optional[asyncio.Lock] = None
@@ -50,7 +63,7 @@ if not firebase_admin._apps:
             logging.error(f"Critical error initializing Firebase Admin: {e2}")
 
 # Initialize Async Firestore client
-db: Any = None
+db: AsyncClient = None  # type: ignore
 try:
     if os.path.exists(settings.google_application_credentials):
         creds = service_account.Credentials.from_service_account_file(settings.google_application_credentials)
@@ -158,22 +171,10 @@ async def get_lichess_ratings_batch(usernames: List[str]) -> Dict[str, dict]:
             username = user_data.get("username", "").lower()
             if not username:
                 continue
-                
-            perfs = user_data.get("perfs", {})
-            user_ratings = {}
-            for pt in LICHESS_VARIANTS:
-                p_data = perfs.get(pt, {})
-                is_prov = p_data.get("prov", False) or p_data.get("games", 0) == 0
-                user_ratings[f"{pt}_rating"] = p_data.get("rating")
-                user_ratings[f"is_{pt}_provisional"] = is_prov
-
-            perfs_tactical = ["storm", "racer", "streak"]
-            for pt in perfs_tactical:
-                user_ratings[f"{pt}_score"] = perfs.get(pt, {}).get("score")
-                
-            results[username] = user_ratings
+            results[username] = _parse_lichess_perfs(user_data)
             
     return results
+
 
 
 # --- Students in-memory cache (TTL = 60 seconds) ---
@@ -263,18 +264,7 @@ async def get_lichess_rating(username: str) -> Optional[dict]:
     
     data = await make_lichess_request(url, headers, response_format="json", cooldown=1.0)
     if data:
-        perfs = data.get("perfs", {})
-        results = {}
-        for pt in LICHESS_VARIANTS:
-            p_data = perfs.get(pt, {})
-            is_prov = p_data.get("prov", False) or p_data.get("games", 0) == 0
-            results[f"{pt}_rating"] = p_data.get("rating")
-            results[f"is_{pt}_provisional"] = is_prov
-
-        perfs_tactical = ["storm", "racer", "streak"]
-        for pt in perfs_tactical:
-            results[f"{pt}_score"] = perfs.get(pt, {}).get("score")
-        return results
+        return _parse_lichess_perfs(data)
     return None
 
 async def get_fsr_ratings(fsr_id: str) -> Optional[dict]:
