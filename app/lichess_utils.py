@@ -202,50 +202,50 @@ def _get_active_items(t: dict) -> list:
     return items
 
 
-def _render_activity_item(item_type: str, t: dict, prefix: str, report_items: list) -> None:
-    """Render a single puzzle/control/exam line into report_items."""
+def _clean_stepchess_title(title: Optional[str]) -> str:
+    """Strip English translations and extra whitespace from Stepchess titles."""
+    if not title:
+        return ""
+    return title.split("|")[0].strip()
+
+
+def _format_stepchess_line(course: str, parent_title: str, task_title: str, item_type: str, t: dict) -> Text:
+    c_clean = _clean_stepchess_title(course)
+    p_clean = _clean_stepchess_title(parent_title)
+    t_clean = _clean_stepchess_title(task_title)
+    
+    if item_type == "controls":
+        t_clean = t_clean or "Контрольная работа"
+    elif item_type == "exams":
+        t_clean = t_clean or "Экзамен"
+    elif item_type == "puzzles":
+        t_clean = t_clean or "Задачи"
+        
+    parts = [p for p in [c_clean, p_clean, t_clean] if p]
+    header = ". ".join(parts)
+    
     if item_type == "puzzles":
         p_attempts = max(t.get('puzzles_success', 0), t.get('puzzles_attempts', 0))
         p_avg = round(p_attempts / t['puzzles'], 1) if t['puzzles'] > 0 else 0
         total_time_str = format_duration(t['time'])
         avg_time_val = t['time'] / t.get('tasks_count', 0) if t.get('tasks_count', 0) > 0 else 0
         avg_time_str = format_duration(avg_time_val)
-        time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
-        report_items.append(Text(f"{prefix}{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
+        time_info = f" | ⏱️ {total_time_str} (ср. {avg_time_str})" if t['time'] > 0 else ""
+        stats = f"{t['puzzles']} зад. (✅ {t.get('puzzles_success', 0)}/{t['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"
     elif item_type == "controls":
         c_attempts = t.get('controls_attempts', 0)
         c_avg = round(c_attempts / t['controls'], 1) if t['controls'] > 0 else 0
         solved_str = ""
         if t.get('controls_max_solved'):
             solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in t['controls_max_solved'])
-        report_items.append(Text(f"{prefix}{t['controls']} контр. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-    elif item_type == "exams":
+        count_zad = t['controls'] * 10
+        stats = f"{count_zad} зад. (✅ {t.get('controls_success', 0)}/{t['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"
+    else:  # exams
         e_attempts = t.get('exams_attempts', 0)
         e_avg = round(e_attempts / t['exams'], 1) if t['exams'] > 0 else 0
-        report_items.append(Text(f"{prefix}{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
-
-
-def _render_course_summary(c: dict, report_items: list) -> None:
-    """Render course-level summary when there are no parent groups."""
-    if c['puzzles'] > 0:
-        p_attempts = max(c.get('puzzles_success', 0), c.get('puzzles_attempts', 0))
-        p_avg = round(p_attempts / c['puzzles'], 1) if c['puzzles'] > 0 else 0
-        total_time_str = format_duration(c['time'])
-        avg_time_val = c['time'] / c.get('tasks_count', 0) if c.get('tasks_count', 0) > 0 else 0
-        avg_time_str = format_duration(avg_time_val)
-        time_info = f" | ⏱ {total_time_str} (ср. {avg_time_str})" if c['time'] > 0 else ""
-        report_items.append(Text(f"   └ {c['puzzles']} зад. (✅ {c.get('puzzles_success', 0)}/{c['puzzles']}) | 🔄 {p_attempts} поп. (ср. {p_avg}){time_info}"))
-    if c['controls'] > 0:
-        c_attempts = c.get('controls_attempts', 0)
-        c_avg = round(c_attempts / c['controls'], 1) if c['controls'] > 0 else 0
-        solved_str = ""
-        if c.get('controls_max_solved'):
-            solved_str = " | Решено: " + ", ".join(f"{x}/10" for x in c['controls_max_solved'])
-        report_items.append(Text(f"   └ {c['controls']} контр. (✅ {c.get('controls_success', 0)}/{c['controls']}) | 🔄 {c_attempts} поп. (ср. {c_avg}){solved_str}"))
-    if c['exams'] > 0:
-        e_attempts = c.get('exams_attempts', 0)
-        e_avg = round(e_attempts / c['exams'], 1) if c['exams'] > 0 else 0
-        report_items.append(Text(f"   └ {c['exams']} экз. (✅ {c.get('exams_success', 0)}/{c['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"))
+        stats = f"{t['exams']} экз. (✅ {t.get('exams_success', 0)}/{t['exams']}) | 🔄 {e_attempts} поп. (ср. {e_avg})"
+        
+    return Text("🧩 ", Bold(header), f": {stats}")
 
 
 async def generate_activity_report(students: List[Student], days: int = 1) -> str:
@@ -429,7 +429,6 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
 
         if "stepchess" in s["stats"]:
             for course, c in s["stats"]["stepchess"]["breakdown"].items():
-                report_items.append(Text("🧩 ", Bold(course), ":"))
                 if "parents" in c and c["parents"]:
                     def parent_sort_key(item):
                         title = item[0]
@@ -438,48 +437,13 @@ async def generate_activity_report(students: List[Student], days: int = 1) -> st
                         parts = [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', title)]
                         return (0, parts)
                     parents_list = sorted(c["parents"].items(), key=parent_sort_key)
-                    for p_idx, (parent_title, p_data) in enumerate(parents_list):
-                        is_last_parent = (p_idx == len(parents_list) - 1)
-                        parent_branch = "   └ " if is_last_parent else "   ├ "
-                        prefix_parent_child = "   │  " if not is_last_parent else "      "
-
-                        if parent_title:
-                            report_items.append(Text(f"{parent_branch}{parent_title}"))
-                            tasks_list = list(p_data["tasks"].items())
-                            for t_idx, (task_title, t) in enumerate(tasks_list):
-                                is_last_task = (t_idx == len(tasks_list) - 1)
-                                active_items = _get_active_items(t)
-                                if task_title:
-                                    prefix_branch = f"{prefix_parent_child}└─ " if is_last_task else f"{prefix_parent_child}├─ "
-                                    prefix_child = f"{prefix_parent_child}   " if is_last_task else f"{prefix_parent_child}│  "
-                                    report_items.append(Text(f"{prefix_branch}{task_title}"))
-                                    for item_idx, item_type in enumerate(active_items):
-                                        item_branch = f"{prefix_child}└ " if item_idx == len(active_items) - 1 else f"{prefix_child}├ "
-                                        _render_activity_item(item_type, t, item_branch, report_items)
-                                else:
-                                    for item_idx, item_type in enumerate(active_items):
-                                        is_last = (item_idx == len(active_items) - 1) and is_last_task
-                                        item_branch = f"{prefix_parent_child}└─ " if is_last else f"{prefix_parent_child}├─ "
-                                        _render_activity_item(item_type, t, item_branch, report_items)
-                        else:
-                            tasks_list = list(p_data["tasks"].items())
-                            for t_idx, (task_title, t) in enumerate(tasks_list):
-                                is_last_task = (t_idx == len(tasks_list) - 1)
-                                active_items = _get_active_items(t)
-                                if task_title:
-                                    prefix_branch = "   └ " if is_last_task else "   ├ "
-                                    prefix_child = "      " if is_last_task else "   │  "
-                                    report_items.append(Text(f"{prefix_branch}{task_title}"))
-                                    for item_idx, item_type in enumerate(active_items):
-                                        item_branch = f"{prefix_child}└ " if item_idx == len(active_items) - 1 else f"{prefix_child}├ "
-                                        _render_activity_item(item_type, t, item_branch, report_items)
-                                else:
-                                    for item_idx, item_type in enumerate(active_items):
-                                        is_last = (item_idx == len(active_items) - 1) and is_last_task
-                                        item_branch = "   └ " if is_last else "   ├ "
-                                        _render_activity_item(item_type, t, item_branch, report_items)
+                    for parent_title, p_data in parents_list:
+                        for task_title, t in p_data["tasks"].items():
+                            for item_type in _get_active_items(t):
+                                report_items.append(_format_stepchess_line(course, parent_title, task_title, item_type, t))
                 else:
-                    _render_course_summary(c, report_items)
+                    for item_type in _get_active_items(c):
+                        report_items.append(_format_stepchess_line(course, "", "", item_type, c))
         report_items.append("")
     return as_list(*report_items).as_html()
 

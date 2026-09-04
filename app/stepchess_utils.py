@@ -187,7 +187,7 @@ def filter_stepchess_activity(activity_data: Dict[str, Any], stats_data: Dict[st
             last_attempt_str = ctrl.get("last_attempt")
             if last_attempt_str:
                 try:
-                    last_attempt_date = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S").date()
+                    last_attempt_date = datetime.strptime(last_attempt_str.split(" ")[0].split("T")[0], "%Y-%m-%d").date()
                     if last_attempt_date >= start_date:
                         c_title = ctrl.get("course_title") or "Общие задачи"
                         p_title = ctrl.get("task_title") or ctrl.get("parent_task_title") or ""
@@ -245,7 +245,7 @@ def filter_stepchess_activity(activity_data: Dict[str, Any], stats_data: Dict[st
             last_attempt_str = exam.get("last_attempt")
             if last_attempt_str:
                 try:
-                    last_attempt_date = datetime.strptime(last_attempt_str, "%Y-%m-%d %H:%M:%S").date()
+                    last_attempt_date = datetime.strptime(last_attempt_str.split(" ")[0].split("T")[0], "%Y-%m-%d").date()
                     if last_attempt_date >= start_date:
                         c_title = exam.get("course_title") or "Общие задачи"
                         p_title = exam.get("task_title") or exam.get("parent_task_title") or ""

@@ -766,18 +766,13 @@ async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Ученик не найден")
         return
         
-    await update_student(student_id, {"rank": rank_val})
-    
-    updated_student = await get_student_by_id(student_id)
-    if not updated_student:
-        await callback.answer("Ошибка сохранения")
-        return
-        
-    updated_student.update_calculated_fields()
+    student.rank = rank_val
+    student.update_calculated_fields()
     await update_student(student_id, {
-        "age": updated_student.age,
-        "group_morning": updated_student.group_morning,
-        "group_evening": updated_student.group_evening
+        "rank": rank_val,
+        "age": student.age,
+        "group_morning": student.group_morning,
+        "group_evening": student.group_evening
     })
         
     await state.clear()
@@ -785,7 +780,7 @@ async def process_setrank_choice(callback: CallbackQuery, state: FSMContext):
     builder.button(text="👤 К профилю", callback_data=f"view_{student_id}_0")
     await callback.message.answer("✅ Разряд сохранен!", reply_markup=get_main_keyboard())
     
-    content = Text("Данные ", Bold(updated_student.fio), " обновлены.")
+    content = Text("Данные ", Bold(student.fio), " обновлены.")
     await callback.message.answer(content.as_html(), reply_markup=builder.as_markup(), parse_mode="HTML")
     await callback.answer()
 
@@ -952,6 +947,9 @@ async def process_search(message: Message, state: FSMContext):
     if not results:
         await message.answer("Ничего не найдено.", reply_markup=get_main_keyboard())
         return
+    if len(results) > 10:
+        await message.answer(f"Найдено учеников: {len(results)}. Показаны первые 10:")
+        results = results[:10]
     for s in results:
         await message.answer(format_student_info(s), reply_markup=get_student_inline_kb(s.id or "", bool(s.lichess or s.stepchess), 0, bool(s.lichess)), parse_mode="HTML")
     await message.answer("Поиск завершен.", reply_markup=get_main_keyboard())

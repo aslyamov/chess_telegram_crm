@@ -83,7 +83,7 @@ _session: Optional[aiohttp.ClientSession] = None
 async def get_session() -> aiohttp.ClientSession:
     global _session
     if _session is None or _session.closed:
-        _session = aiohttp.ClientSession()
+        _session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30.0))
     return _session
 
 async def close_session():
@@ -237,11 +237,15 @@ async def update_students_batch(updates: List[tuple]) -> None:
     """Perform batch updates in Firestore. updates is a list of (student_id, data_dict)."""
     if not updates:
         return
-    batch = db.batch()
-    for student_id, data in updates:
-        doc_ref = db.collection(COLLECTION_NAME).document(student_id)
-        batch.update(doc_ref, data)
-    await batch.commit()
+    # Firestore allows max 500 operations per batch
+    chunk_size = 450
+    for i in range(0, len(updates), chunk_size):
+        chunk = updates[i:i + chunk_size]
+        batch = db.batch()
+        for student_id, data in chunk:
+            doc_ref = db.collection(COLLECTION_NAME).document(student_id)
+            batch.update(doc_ref, data)
+        await batch.commit()
     invalidate_students_cache()
 
 async def delete_student(student_id: str) -> None:
@@ -283,8 +287,8 @@ async def get_fsr_ratings(fsr_id: str) -> Optional[dict]:
                         for key, label in [("classical", "Классические"), ("rapid", "Быстрые"), ("blitz", "Блиц")]:
                             if label in text:
                                 b_tag = li.find("b")
-                                if b_tag:
-                                    results[key] = int(b_tag.text)
+                                if b_tag and b_tag.text.strip().isdigit():
+                                    results[key] = int(b_tag.text.strip())
                     await asyncio.sleep(0.5)
                     return results
                 else:
